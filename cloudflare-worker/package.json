@@ -1,0 +1,18 @@
+{
+    "name": "geoguessr-recorder",
+    "version": "0.0.1",
+    "private": true,
+    "scripts": {
+      "deploy": "wrangler deploy",
+      "start": "wrangler dev"
+    },
+    "devDependencies": {
+      "itty-router": "^3.0.12",
+      "wrangler": "^3.0.0"
+    },
+    "dependencies": {
+      "@planetscale/database": "^1.11.0",
+      "undici": "^5.24.0"
+    }
+  }
+  
