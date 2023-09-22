@@ -6,6 +6,10 @@ const router = Router();
 // GET positions - TODO
 router.get("/api/get-positions/:id", ({ params }) => success({userId: params.id, positions: []}));
 
+router.options("*", async(request, env, ctx) => {
+	return success({});
+});
+
 /**
  * Record a position for the user
  */
@@ -71,7 +75,9 @@ function success(data) {
 		status: 200,
 		headers: {
 			"Content-Type": "application/json",
-			"Access-Control-Allow-Origin": "*"
+			"Access-Control-Allow-Origin": "*",
+			"Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
+			"Access-Control-Allow-Headers": "Origin, Content-Type, x-requested-with, Accept"
 		},
 	});
 }
@@ -81,6 +87,9 @@ function fail(data) {
 		status: 400,
 		headers: {
 			"Content-Type": "application/json",
+			"Access-Control-Allow-Origin": "*",
+			"Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
+			"Access-Control-Allow-Headers": "Origin, Content-Type, x-requested-with, Accept"
 		},
 	});
 }

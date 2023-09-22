@@ -18,6 +18,7 @@ export default {
 	// The fetch handler is invoked when this worker receives a HTTP(S) request
 	// and should return a Response (optionally wrapped in a Promise)
 	async fetch(request, env, ctx) {
+		// console.log(JSON.stringify(request.cf));
 
 		// You'll find it helpful to parse the request.url string into a URL object.
 		const url = new URL(request.url);
