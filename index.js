@@ -11,11 +11,37 @@
 
 // TODO:
 // * Come up with a way to view location data
+// * Come up with a way to make a private api key
+// * Add move forward/backward keys that can be used with dynamic distance
+// * Figure out what to do if teleport fails
 
-function GeoguessrEvents() {
+// Change host to wherever server is running.
+// Usually http://127.0.0.1:8787/api/ for local servers
+// Usually https://geoguessr.zyzzx.workers.dev/api for remote
+const URL = "https://127.0.0.1:8787/";
+
+function Geoguessr() {
+    /**
+     * @type {Number}
+     * Round number
+     */
     let roundNumber = 0;
+
+    /**
+     * @type {Object}
+     * Event handlers
+     */
     let events = {};
-    let map = null;
+
+    /**
+     * Google Map object
+     */
+    let map;
+
+    /**
+     * The main streetview display
+     */
+    let panorama;
 
     // Doesn't work well for streaks.
     function getRound() {
@@ -136,15 +162,22 @@ function GeoguessrEvents() {
      * @param {Object} google The Google API that was loaded. Should have a maps object for the Maps API.
      */
     function onGoogleMapsLoaded(google) {
+        emit("ready", {map: google.maps});
+
         google.maps.StreetViewPanorama = class extends google.maps.StreetViewPanorama {
             constructor(...args) {
                 super(...args);
+
+                panorama = this;
+                map = google.maps;
+                emit("ready", { panorama, map });
 
                 this.addListener('position_changed', () => {
                     if (isGamePage()) {
                         const lat = this.getPosition().lat();
                         const lng = this.getPosition().lng();
                         const { heading, pitch } = this.getPov();
+
                         emit("position-changed", {
                             lat,
                             lng,
@@ -257,20 +290,11 @@ function GeoguessrEvents() {
 		off,
         isGamePage,
         getRound,
+        getGameData,
 	};
 }
 
 (function() {
-    // Change host to wherever server is running.
-    // Usually http://127.0.0.1:8787/api/ for local servers
-    // Usually https://geoguessr.zyzzx.workers.dev/api for remote
-    const host = "http://127.0.0.1:8787/api/";
-
-    /**
-     * @type {Object|null}
-     * Google Maps API object
-     */
-    let maps;
 
     /**
      * @type {{lng: number, lat: number}[]}
@@ -281,16 +305,27 @@ function GeoguessrEvents() {
     // Radius of the Earth in km
     const r_earth = 6378.137;
 
+    // Current position on map
+    let position;
+
+    // Google maps object
+    let map;
+
+    // Streetview object
+    let panorama;
+
     /**
      * Make a post request to server.
-     * This function uses GM_xmlhttpRequest so it will require the user
-     * to accept calls to the remote server.
      *
-     * @param {string} URL to make post requst to
+     * @param {string} API endpoint to make post requst to
      * @param {Object} Data to send along with request
      * @return {Promise<Object>}
      */
-    function post(url, data = {}) {
+    function postApi(endpoint, data = {}) {
+        if (!endpoint.startsWith("http")) {
+            endpoint = `${URL}$endpoint`;
+        }
+
         return new Promise((resolve, reject) =>{
             const xhr = new XMLHttpRequest();
 
@@ -303,35 +338,12 @@ function GeoguessrEvents() {
 
             xhr.onerror = (ex) => reject(ex);
 
-            xhr.open('POST', url, true)
+            xhr.open('POST', endpoint, true)
             xhr.setRequestHeader('Content-Type', 'application/json');
             xhr.setRequestHeader("Accept","application/json");
             xhr.send(JSON.stringify(data));
         });
     }
-
-    /**
-     * Get the current GeoGuessr user
-     *
-     * @return {Object|null}
-     */
-    function getUser() {
-        let data = document.getElementById("__NEXT_DATA__");
-        if (data) {
-            data = JSON.parse(data.text);
-            if (data.props.middlewareResults) {
-                const mw = data.props.middlewareResults;
-                for (let i = 0; i < mw.length; i++) {
-                    if (mw[i] && mw[i].account) {
-                        return mw[i].account.user;
-                    }
-                }
-            }
-        }
-
-        return null;
-    }
-
 
     /**
      * Loop through all visited points and check if the provided
@@ -376,8 +388,8 @@ function GeoguessrEvents() {
      * @param {number} position.pitch The pitch on the map. Negative means facing down, positive means facing up
      */
     async function recordPosition(position) {
-        const url = `${host}record-position`;
-        const user = getUser();
+        const url = `record-position`;
+        const user = geoguessr.getGameData().player;
 
         // Check if server call should even be made
         // by cycling through recorded positions and making
@@ -388,20 +400,118 @@ function GeoguessrEvents() {
             return;
         }
 
-        positionHistory.push({lat, lng});
-
-        const result = await post(url, {
-            userId: user.userId,
-            nick: user.nick,
-            ...position
-        });
-
-        console.log(result);
+        try {
+            const result = await postApi(url, {
+                userId: user.id,
+                nick: user.nick,
+                ...position
+            });
+            console.log(result);
+        } catch (ex) {
+        }
     }
 
-    const geoguessr = GeoguessrEvents();
-    geoguessr.on("position-changed", (obj) => recordPosition(obj));
+
+
+    /**
+     * Compute new longitude and latitude coordinates given a starting point, distance, and heading
+     *
+     * @param {LatLng} center Origin point to compute offset from
+     * @param {number} distance Distance in meters
+     * @param {number} angle Angle in degrees
+     * @return {LatLng}
+     */
+    function calculateNewCoordinates({lat, lng}, distance, heading) {
+
+        // This is effectively the same as:
+        // const offset = map.geometry.spherical.computeOffset({lat, lng}, distance, heading);
+        // return {lat: offset.lat(), lng: offset.lng()};
+        // Honestly, I don't know why I made this (modified from ChatGPT), other than for curiosity.
+
+        // Convert heading from degrees to radians
+        heading = (heading * Math.PI) / 180;
+
+        // Convert latitude and longitude from degrees to radians
+        lat = (lat * Math.PI) / 180;
+        lng = (lng * Math.PI) / 180;
+
+        // Calculate common ratio used in offset calculations
+        const ratio = (distance / 1000) / r_earth;
+
+        // Calculate the new latitude
+        const newLat = Math.asin(
+            Math.sin(lat) * Math.cos(ratio) +
+            Math.cos(lat) * Math.sin(ratio) * Math.cos(heading)
+        );
+
+        // Calculate the new longitude
+        const newLng = lng + Math.atan2(
+            Math.sin(heading) * Math.sin(ratio) * Math.cos(lat),
+            Math.cos(ratio) - Math.sin(lat) * Math.sin(newLat)
+        );
+
+        // Return data, converting back to degrees
+        return {
+            lat: (newLat * 180) / Math.PI,
+            lng: (newLng * 180) / Math.PI
+        };
+    }
+
+
+    function setPosition(data) {
+        position = data;
+        positionHistory.push(position);
+        // recordPosition(position);
+    }
+
+    /**
+     * Teleport to new position
+     * TODO: What happens if there is nothing to teleport to?
+     *
+     * @param {Number} How far to teleport
+     * @param {Boolean} Whether to move backwards or not. Default forward.
+     */
+    function teleport(distance, backwards = false) {
+        const lat = panorama.getPosition().lat();
+        const lng = panorama.getPosition().lng();
+        let { heading, pitch } = panorama.getPov();
+
+        let offsetHeading = heading;
+        if (backwards) {
+            offsetHeading = (heading + 180) % 360;
+        }
+
+        const location = calculateNewCoordinates({lat, lng}, distance, offsetHeading);
+
+        const svService = new map.StreetViewService();
+        svService.getPanorama({ location, radius: 1000, preference: "nearest"}, function (data, status) {
+            panorama.setPosition(data.location.latLng);
+            panorama.setPov({heading, pitch});
+        });
+    }
+
+
+    const geoguessr = new Geoguessr();
+    geoguessr.on("ready", (obj) => {
+        map = obj.map;
+        panorama = obj.panorama;
+    });
+    geoguessr.on("position-changed", setPosition);
     geoguessr.on("round-ended", (obj) => console.log("Round ended", obj));
     geoguessr.on("round-started", (obj) => console.log("Round started", obj));
     geoguessr.on("game-ended", () => console.log("Game ended"));
+
+    function setupHotkeys() {
+        document.addEventListener("keydown", (event) => {
+            if (!geoguessr.isGamePage() || !map) {
+                return;
+            }
+
+            if (event.code === "Digit3") {
+                teleport(150);
+            }
+        });
+    }
+
+    setTimeout(setupHotkeys, 1000);
 })();
