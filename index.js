@@ -74,7 +74,6 @@ function Geoguessr() {
             location.pathname.startsWith("/live-challenge/");
     }
 
-
     /**
      * Fetch the game data at time of load.
      * This is basically the data the GeoGuessr app gets on page load.
@@ -129,7 +128,7 @@ function Geoguessr() {
         } else if (node.className.startsWith("standard-final-result_wrapper")) {
             // Classic/explorer
             emit("game-ended");
-        } else if (node.classList.contains("guess-map")) {
+        } else if (node.querySelector('[data-qa="pano-zoom-in"]')) {
             if (getRound() !== roundNumber) {
                 roundNumber = getRound();
                 emit("round-started", {round: roundNumber});
@@ -162,8 +161,6 @@ function Geoguessr() {
      * @param {Object} google The Google API that was loaded. Should have a maps object for the Maps API.
      */
     function onGoogleMapsLoaded(google) {
-        emit("ready", {map: google.maps});
-
         google.maps.StreetViewPanorama = class extends google.maps.StreetViewPanorama {
             constructor(...args) {
                 super(...args);
@@ -313,6 +310,12 @@ function Geoguessr() {
 
     // Streetview object
     let panorama;
+
+    // Distance to teleport
+    let teleportDistance = 25;
+
+    // Allowed distances for teleport
+    let teleportOptions = [25, 50, 75, 100, 150, 200, 250, 500, 1000];
 
     /**
      * Make a post request to server.
@@ -490,28 +493,129 @@ function Geoguessr() {
         });
     }
 
+    /**
+     * Setup hot keys an associated event handlers
+     */
+    function setupHotkeys() {
+        const handlers = {
+            "KeyF": () => teleport(teleportDistance),
+            "KeyB": () => teleport(teleportDistance, true),
+            "PageUp": () => increaseTeleport(),
+            "PageDown": () => decreaseTeleport()
+        };
+
+        document.addEventListener("keyup", (event) => {
+            if (!geoguessr.isGamePage() || !map) {
+                return;
+            }
+
+            if (Object.keys(handlers).indexOf(event.code) >= 0) {
+                event.preventDefault();
+                event.stopPropagation();
+                handlers[event.code]();
+            }
+        });
+    }
+
+    /**
+     * Toggle the UI off
+     */
+    function hideUi() {
+        let dom = document.getElementById("zzyzx-ui");
+        if (dom) {
+            dom.style.visibility = "hidden";
+        }
+    }
+
+    /**
+     * Toggle the UI onn
+     */
+    function showUi() {
+        let dom = document.getElementById("zzyzx-ui");
+        if (dom) {
+            dom.style.visibility = "";
+        }
+    }
+
+    /**
+     * Set up the UI
+     */
+    function setupUi() {
+        if (document.getElementById("zzyzx-ui")) {
+            return;
+        }
+
+        const ui = document.createElement("DIV");
+        ui.style.visibility = "hidden";
+        ui.style.position = "fixed";
+        ui.style.top = "3em";
+        ui.style.left = "1em";
+        ui.style.zIndex = "99999";
+        ui.style.fontSize = "16px";
+        ui.style.display = "block";
+        ui.style.width = "300px";
+        ui.id = "zzyzx-ui";
+
+        const div = document.createElement("DIV");
+        div.innerText = "Teleport Distance: " + teleportDistance + " m";
+        div.style.position = "absolute";
+        div.style.top = "0";
+        div.style.color = "white";
+        div.id = "zzyzx-teleport-label";
+
+        ui.appendChild(div);
+        document.body.appendChild(ui);
+    }
+
+    /**
+     * Draw teleport distance
+     */
+    function drawTeleport() {
+        const dom = document.getElementById("zzyzx-teleport-label");
+        if (dom) {
+            dom.innerText = "Teleport Distance: " + teleportDistance + " m";
+        }
+    }
+
+    /**
+     * Event handler for increasing the teleport distance
+     */
+    function increaseTeleport() {
+        let index = teleportOptions.indexOf(teleportDistance);
+        if (index >= teleportOptions.length - 1) {
+            index = teleportOptions.length - 1;
+        } else {
+            index++;
+        }
+
+        teleportDistance = teleportOptions[index];
+        drawTeleport();
+    }
+
+    /**
+     * Event handler for decreasing the teleport distance
+     */
+    function decreaseTeleport() {
+        let index = teleportOptions.indexOf(teleportDistance);
+        if (index <= 0) {
+            index = 0;
+        } else {
+            index--;
+        }
+
+        teleportDistance = teleportOptions[index];
+        drawTeleport();
+    }
 
     const geoguessr = new Geoguessr();
     geoguessr.on("ready", (obj) => {
         map = obj.map;
         panorama = obj.panorama;
+        setupHotkeys();
+        setupUi();
     });
     geoguessr.on("position-changed", setPosition);
-    geoguessr.on("round-ended", (obj) => console.log("Round ended", obj));
-    geoguessr.on("round-started", (obj) => console.log("Round started", obj));
+    geoguessr.on("round-ended", (obj) => {hideUi(); console.log("Round ended", obj)});
+    geoguessr.on("round-started", (obj) => {showUi(); console.log("Round started", obj)});
     geoguessr.on("game-ended", () => console.log("Game ended"));
-
-    function setupHotkeys() {
-        document.addEventListener("keydown", (event) => {
-            if (!geoguessr.isGamePage() || !map) {
-                return;
-            }
-
-            if (event.code === "Digit3") {
-                teleport(150);
-            }
-        });
-    }
-
-    setTimeout(setupHotkeys, 1000);
 })();
