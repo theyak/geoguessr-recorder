@@ -12,7 +12,6 @@
 // TODO:
 // * Come up with a way to view location data
 // * Come up with a way to make a private api key
-// * Add move forward/backward keys that can be used with dynamic distance
 // * Figure out what to do if teleport fails
 
 // Change host to wherever server is running.
@@ -43,6 +42,56 @@ function Geoguessr() {
      */
     let panorama;
 
+    /**
+     * Game data from AJAX request.
+     */
+    let gameData = {};
+
+    /**
+     * Original fetch function
+     */
+    const {fetch: origFetch} = window;
+
+    /**
+     * Fetch interceptor to read data from games endpoint.
+     * The GET request indicates a new round.
+     * The POST request indicates finished round or when starting a new game and URL doesn't have a game ID.
+     * The only problem is this doesn't fire when refreshing game or starting a game.
+     * With a refresh, the data is in __NEXT_DATA__.props.pageProps
+     * The being said, it can be loaded from GET https://www.geoguessr.com/api/v3/games/[game-id]?client=web
+     * When starting a new game, it calls POST https://www.geoguessr.com/api/v3/games with the following data:
+     *  - forbidMoving
+     *  - forbidZooming
+     *  - map: "map id"
+     *  - rounds: 5
+     *. - timeLimit: 0 for inifinity
+     *  - type: "standard"
+     */
+    window.fetch = async (...args) => {
+        const url = args[0];
+        const response = await origFetch(...args);
+
+        if (url.indexOf("https://www.geoguessr.com/api/v3/games") >= 0) {
+            const method = args[1].method;
+
+            response.clone().json().then(data => {
+                gameData = data;
+                if (method === "POST") {
+                    if (url === "https://www.geoguessr.com/api/v3/games") {
+                        emit("round-started", data);
+                    } else {
+                        emit("round-ended", data);
+                    }
+                } else {
+                    emit("round-started", data);
+                }
+            })
+            .catch(err => console.error(err));
+        }
+
+        return response;
+    };
+
     // Doesn't work well for streaks.
     function getRound() {
         const roundData = document.querySelector("div[data-qa='round-number']");
@@ -56,6 +105,10 @@ function Geoguessr() {
             }
         }
         return null;
+    }
+
+    function getPosition() {
+        return {lat, lng, heading, pitch};
     }
 
     /**
@@ -92,7 +145,7 @@ function Geoguessr() {
         const data = JSON.parse(dom.innerText);
         const map = data.props.pageProps.map;
         const game = {...data.props.pageProps.game};
-        const player = data.props.pageProps.game.player;
+        const player = data.props.middlewareResults[1].account;
         delete game.player;
 
         return {
@@ -117,21 +170,27 @@ function Geoguessr() {
         }
 
         if (node.className.startsWith("result-layout_root")) {
-            emit("round-ended", {round: roundNumber});
-
             // streaks/quick play
             if (document.querySelector('[data-qa="play-again-button"]')) {
-                emit("game-ended");
-            }
+                emit("game-ended", gameData);
+           }
 
             roundNumber = 0;
         } else if (node.className.startsWith("standard-final-result_wrapper")) {
             // Classic/explorer
-            emit("game-ended");
+            emit("game-ended", gameData);
         } else if (node.querySelector('[data-qa="pano-zoom-in"]')) {
-            if (getRound() !== roundNumber) {
-                roundNumber = getRound();
-                emit("round-started", {round: roundNumber});
+            // If we get here and no data was loaded via fetch call, then that means we did a refresh and data is in __NEXT_DATA__.
+            if (Object.keys(gameData).length <= 0) {
+                const dom = document.getElementById("__NEXT_DATA__");
+                if (!dom) {
+                    return null;
+                }
+                gameData = JSON.parse(dom.innerText);
+                if (gameData.props) {
+                    gameData = gameData.props.pageProps.game;
+                    emit("round-started", gameData);
+                }
             }
         }
     }
@@ -173,7 +232,8 @@ function Geoguessr() {
                     if (isGamePage()) {
                         const lat = this.getPosition().lat();
                         const lng = this.getPosition().lng();
-                        const { heading, pitch } = this.getPov();
+                        const heading = this.getPov().heading;
+                        const pitch = this.getPov().pitch;
 
                         emit("position-changed", {
                             lat,
@@ -286,6 +346,7 @@ function Geoguessr() {
 		on,
 		off,
         isGamePage,
+        getPosition,
         getRound,
         getGameData,
 	};
@@ -329,6 +390,7 @@ function Geoguessr() {
             endpoint = `${URL}$endpoint`;
         }
 
+        console.log("Calling " + endpoint);
         return new Promise((resolve, reject) =>{
             const xhr = new XMLHttpRequest();
 
@@ -394,14 +456,16 @@ function Geoguessr() {
         const url = `record-position`;
         const user = geoguessr.getGameData().player;
 
+        console.log("Checking position");
         // Check if server call should even be made
         // by cycling through recorded positions and making
         // sure we haven't recorded a position within a
         // 50 meter bounding box.
         const {lat, lng} = position;
-        if (checkBoundingBoxIntersection(lat, lng, 50)) {
+        if (checkBoundingBoxIntersection(lat, lng, 100)) {
             return;
         }
+        console.log("Recording position");
 
         try {
             const result = await postApi(url, {
@@ -464,7 +528,7 @@ function Geoguessr() {
     function setPosition(data) {
         position = data;
         positionHistory.push(position);
-        // recordPosition(position);
+        recordPosition(position);
     }
 
     /**
@@ -500,6 +564,7 @@ function Geoguessr() {
         const handlers = {
             "KeyF": () => teleport(teleportDistance),
             "KeyB": () => teleport(teleportDistance, true),
+            "KeyV": () => teleport(teleportDistance, true),
             "PageUp": () => increaseTeleport(),
             "PageDown": () => decreaseTeleport()
         };
