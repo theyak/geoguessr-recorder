@@ -5,19 +5,44 @@
 // @description  Record positions visited in GeoGuessr
 // @author       theyak
 // @match        https://www.geoguessr.com/*
-// @grant        none
 // @run-at       document-start
 // ==/UserScript==
 
+// Script has only been made to work with single player standard and streak modes.
+// It might work with standard multi-player mode
+// It does not work with battle royale as I never play that.
+//
+// GeoGuessr is largely played on the honor system. Please do not use this script or any other method to cheat.
+//
 // TODO:
+// * Update record-position endpoint to work with new gameData
 // * Come up with a way to view location data
 // * Come up with a way to make a private api key
 // * Figure out what to do if teleport fails
+// * Fix round-ended event from firing when starting streaks
+// * After playing single rounds, I went to a regular game and round-started fired twice. Fix that.
 
 // Change host to wherever server is running.
-// Usually http://127.0.0.1:8787/api/ for local servers
+// Usually http://127.0.0.1:4321/ for local servers
 // Usually https://geoguessr.zyzzx.workers.dev/api for remote
-const URL = "https://127.0.0.1:8787/";
+const URL = "http://localhost:4321/";
+
+// Change token to whatever you were assigned in the web app.
+// You can also store it in localStorage while on the GeoGuessr website.
+// localStorage.setItem("user_token", "your-token-here");
+const TOKEN = localStorage.getItem("user_token") || "your-token-here";
+
+/**
+ * @typdef {Object} Position
+ * @property {number} lat
+ * @property {number} lng
+ * @property {number} pitch
+ * @property {number} heading
+ */
+
+/**
+ * @typedef {Object} GameData Various information about game, including map, player, round number, etc.
+ */
 
 function Geoguessr() {
     /**
@@ -48,12 +73,23 @@ function Geoguessr() {
     let gameData = {};
 
     /**
+     * Window object
+     */
+    let win = unsafeWindow || window;
+
+    /**
      * Original fetch function
      */
-    const {fetch: origFetch} = window;
+    const {fetch: origFetch} = win;
+
+    /**
+     * Current player position
+     */
+    const position = {lat: 0, lng: 0, pitch: 0, heading: 0};
 
     /**
      * Fetch interceptor to read data from games endpoint.
+     * Probably only works for single player games for now. Definitely doesn't work for Battle Royale Distance
      * The GET request indicates a new round.
      * The POST request indicates finished round or when starting a new game and URL doesn't have a game ID.
      * The only problem is this doesn't fire when refreshing game or starting a game.
@@ -67,7 +103,7 @@ function Geoguessr() {
      *. - timeLimit: 0 for inifinity
      *  - type: "standard"
      */
-    window.fetch = async (...args) => {
+    win.fetch = async (...args) => {
         const url = args[0];
         const response = await origFetch(...args);
 
@@ -77,13 +113,16 @@ function Geoguessr() {
             response.clone().json().then(data => {
                 gameData = data;
                 if (method === "POST") {
-                    if (url === "https://www.geoguessr.com/api/v3/games") {
-                        emit("round-started", data);
+                    if (url === "https://www.geoguessr.com/api/v3/games" || url === "https://www.geoguessr.com/api/v3/games/streak") {
+                        emitRoundStart(data);
                     } else {
-                        emit("round-ended", data);
+                        // data.state is usually "started", but changes to "finished" after last round.
+                        // This is provided before the results page.
+                        emitRoundEnd(data);
                     }
                 } else {
-                    emit("round-started", data);
+                    // data.mode is "streak" for streak games"
+                    emitRoundStart(data);
                 }
             })
             .catch(err => console.error(err));
@@ -91,25 +130,6 @@ function Geoguessr() {
 
         return response;
     };
-
-    // Doesn't work well for streaks.
-    function getRound() {
-        const roundData = document.querySelector("div[data-qa='round-number']");
-        if (roundData) {
-            let roundElement = roundData.querySelector("div:last-child");
-            if (roundElement) {
-                let round = parseInt(roundElement.innerText.charAt(0));
-                if (!isNaN(round) && round >= 1 && round <= 5) {
-                    return round;
-                }
-            }
-        }
-        return null;
-    }
-
-    function getPosition() {
-        return {lat, lng, heading, pitch};
-    }
 
     /**
      * Check if the current location is a game page
@@ -128,32 +148,45 @@ function Geoguessr() {
     }
 
     /**
-     * Fetch the game data at time of load.
-     * This is basically the data the GeoGuessr app gets on page load.
+     * Emit the round-start event, making sure it is not sent twice in a row.
      *
-     * @return {Object} gameData
-     * @return {Object} gameData.map
-     * @return {Object} gameData.game
-     * @return {Object} gameData.player
+     * @param {*} data The current game data.
      */
-    function getGameData() {
-        const dom = document.getElementById("__NEXT_DATA__");
-        if (!dom) {
-            return null;
+    function emitRoundStart(data) {
+        if (!data) {
+            data = gameData;
         }
 
-        const data = JSON.parse(dom.innerText);
-        const map = data.props.pageProps.map;
-        const game = {...data.props.pageProps.game};
-        const player = data.props.middlewareResults[1].account;
-        delete game.player;
-
-        return {
-            map,
-            game,
-            player
-        };
+        const hash = `${data.token}-${data.round}`;
+        if (hash !== emitRoundStart.lastHash) {
+            emit("round-start", data);
+            emitRoundStart.lastHash = hash;
+        }
     }
+    emitRoundStart.lastHash = "";
+
+    /**
+     * Emit the round-end event, making sure it is not sent twice in a row.
+     *
+     * @param {GameData} data The current game data.
+     */
+    function emitRoundEnd(data) {
+        if (!data) {
+            data = gameData;
+        }
+
+        const hash = `${data.token}-${data.round}`;
+        if (hash !== emitRoundStart.lastHash) {
+            emit("round-end", data);
+
+            if (data.state === "finished") {
+                emit("game-end", data);
+            }
+            emitRoundEnd.lastHash = hash;
+        }
+    }
+    emitRoundEnd.lastHash = "";
+
 
     /**
      * Check for various DOM manipulations indicating a certain state
@@ -172,13 +205,13 @@ function Geoguessr() {
         if (node.className.startsWith("result-layout_root")) {
             // streaks/quick play
             if (document.querySelector('[data-qa="play-again-button"]')) {
-                emit("game-ended", gameData);
-           }
+                // emit("game-end", gameData);
+            }
 
             roundNumber = 0;
         } else if (node.className.startsWith("standard-final-result_wrapper")) {
             // Classic/explorer
-            emit("game-ended", gameData);
+            // emit("game-end", gameData);
         } else if (node.querySelector('[data-qa="pano-zoom-in"]')) {
             // If we get here and no data was loaded via fetch call, then that means we did a refresh and data is in __NEXT_DATA__.
             if (Object.keys(gameData).length <= 0) {
@@ -186,18 +219,21 @@ function Geoguessr() {
                 if (!dom) {
                     return null;
                 }
-                gameData = JSON.parse(dom.innerText);
-                if (gameData.props) {
-                    gameData = gameData.props.pageProps.game;
-                    emit("round-started", gameData);
+                const data = JSON.parse(dom.innerText);
+                if (data.props && data.props.pageProps) {
+                    gameData = data.props.pageProps.game;
+                    emitRoundStart(gameData);
                 }
             }
         }
     }
 
+    /**
+     * Set up a basic DOM observer so we can watch for basic game events.
+     */
     function setupMutationObserver() {
         const observer = new MutationObserver((mutations) => {
-            const win = window || unsafeWindow;
+            const win = unsafeWindow || window;
             if (!win.google) {
                 return;
             }
@@ -232,15 +268,30 @@ function Geoguessr() {
                     if (isGamePage()) {
                         const lat = this.getPosition().lat();
                         const lng = this.getPosition().lng();
+                        if (position.lat !== lat || position.lng !== lng) {
+                            position.lat = lat;
+                            position.lng = lng;
+                            emit("position-changed", {
+                                position,
+                                game: gameData,
+                            });
+                        }
+                    }
+                });
+
+                // This fires a lot! If doing UI changes, you might want to debounce your event handler.
+                this.addListener("pov_changed", () => {
+                    if (isGamePage()) {
                         const heading = this.getPov().heading;
                         const pitch = this.getPov().pitch;
-
-                        emit("position-changed", {
-                            lat,
-                            lng,
-                            heading,
-                            pitch
-                        });
+                        if (position.pitch !== pitch || position.heading !== heading) {
+                            position.pitch = pitch;
+                            position.heading = heading;
+                            emit("pov-changed", {
+                                position,
+                                game: gameData,
+                            });
+                        }
                     }
                 });
             }
@@ -346,9 +397,7 @@ function Geoguessr() {
 		on,
 		off,
         isGamePage,
-        getPosition,
-        getRound,
-        getGameData,
+        position
 	};
 }
 
@@ -362,9 +411,6 @@ function Geoguessr() {
 
     // Radius of the Earth in km
     const r_earth = 6378.137;
-
-    // Current position on map
-    let position;
 
     // Google maps object
     let map;
@@ -387,10 +433,9 @@ function Geoguessr() {
      */
     function postApi(endpoint, data = {}) {
         if (!endpoint.startsWith("http")) {
-            endpoint = `${URL}$endpoint`;
+            endpoint = `${URL}${endpoint}`;
         }
 
-        console.log("Calling " + endpoint);
         return new Promise((resolve, reject) =>{
             const xhr = new XMLHttpRequest();
 
@@ -411,6 +456,36 @@ function Geoguessr() {
     }
 
     /**
+     * Greasemonkey/Tampermonkey version of sending data to API.
+     * I've had mixed luck with XMLHttpRequest so keeping this here
+     * if needed. If we do use this, @grant GM_xmlhttpRequest and
+     * @grant unsafeWindow must be placed in the script headers.
+     *
+     * @param {string} API endpoint to make post requst to
+     * @param {Object} Data to send along with request
+     * @return {Promise<Object>}
+     */
+    function GM_postApi(endpoint, data = {}) {
+        if (!endpoint.startsWith("http")) {
+            endpoint = `${URL}${endpoint}`;
+        }
+
+        return new Promise((resolve, reject) => {
+           GM_xmlhttpRequest({
+               method: "POST",
+               url: endpoint,
+               data: JSON.stringify(data),
+               onload: (data) => resolve(JSON.parse(data)),
+               onerror: (data) => reject(data),
+               headers: {
+                   "Content-Type": "application/json",
+                   "Accept": "application/json"
+               }
+           });
+        });
+    }
+
+    /**
      * Loop through all visited points and check if the provided
      * point is within in _distance_ range of those points.
      *
@@ -422,17 +497,15 @@ function Geoguessr() {
     function checkBoundingBoxIntersection(lat, lng, distance) {
         // Length of 1 meter in degrees = 0.000008983152841195216
         const m = 1 / (((2 * Math.PI) / 360) * r_earth) / 1000;
-        const degrees = distance * m;
+        const dLat = distance * m;
 
-        let found = false;
         for (let position of positionHistory) {
+            const dLng = dLat / Math.cos(position.lat * (Math.PI / 180));
 
-            const dLat = degrees / Math.cos(position.lat * (Math.PI / 180));
-
-            let minLatitude = position.lat - degrees;
-            let maxLatitude = position.lat + degrees;
-            let minLongitude = position.lng - dLat;
-            let maxLongitude = position.lng + dLat;
+            let minLatitude = position.lat - dLat;
+            let maxLatitude = position.lat + dLat;
+            let minLongitude = position.lng - dLng;
+            let maxLongitude = position.lng + dLng;
 
             if (lat > minLatitude && lat < maxLatitude && lng > minLongitude && lng < maxLongitude) {
                 return true;
@@ -446,35 +519,40 @@ function Geoguessr() {
     /**
      * Record current position to database
      *
-     * @param {Object} position Position to record
-     * @param {number} position.lng Current longitude position on map
-     * @param {number} position.lat Current latitude position on map
-     * @param {number} position.heading Direction facing on map
-     * @param {number} position.pitch The pitch on the map. Negative means facing down, positive means facing up
+     * @param {Object} param
+     * @param {Position} param.position Current position on map
+     * @param {GameData} param.game Data about game. Includes all sorts of neat things.
      */
-    async function recordPosition(position) {
-        const url = `record-position`;
-        const user = geoguessr.getGameData().player;
+    async function recordPosition({position, game}) {
 
-        console.log("Checking position");
+        if (Object.keys(game).length <= 0) {
+            return;
+        }
+
+        const url = `record-location`;
+
         // Check if server call should even be made
         // by cycling through recorded positions and making
         // sure we haven't recorded a position within a
-        // 50 meter bounding box.
+        // 150 meter bounding box.
         const {lat, lng} = position;
-        if (checkBoundingBoxIntersection(lat, lng, 100)) {
+        if (checkBoundingBoxIntersection(lat, lng, 200)) {
             return;
         }
-        console.log("Recording position");
+        positionHistory.push({lat, lng});
 
         try {
             const result = await postApi(url, {
-                userId: user.id,
-                nick: user.nick,
+                token: TOKEN,
+                type: "travel",
+                game: game.token,
+                round: game.round,
+                map: game.map,
+                nick: game.player.nick,
                 ...position
             });
-            console.log(result);
         } catch (ex) {
+            console.log("error", ex);
         }
     }
 
@@ -522,13 +600,6 @@ function Geoguessr() {
             lat: (newLat * 180) / Math.PI,
             lng: (newLng * 180) / Math.PI
         };
-    }
-
-
-    function setPosition(data) {
-        position = data;
-        positionHistory.push(position);
-        recordPosition(position);
     }
 
     /**
@@ -679,8 +750,8 @@ function Geoguessr() {
         setupHotkeys();
         setupUi();
     });
-    geoguessr.on("position-changed", setPosition);
-    geoguessr.on("round-ended", (obj) => {hideUi(); console.log("Round ended", obj)});
-    geoguessr.on("round-started", (obj) => {showUi(); console.log("Round started", obj)});
-    geoguessr.on("game-ended", () => console.log("Game ended"));
+    geoguessr.on("position-changed", recordPosition);
+    geoguessr.on("round-end", (obj) => {hideUi(); console.log("Round ended", obj)});
+    geoguessr.on("round-start", (obj) => {showUi(); console.log("Round started", obj)});
+    geoguessr.on("game-end", () => console.log("Game ended"));
 })();
