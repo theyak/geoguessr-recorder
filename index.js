@@ -27,8 +27,8 @@ const TOKEN = "";
 // Change host to wherever server is running.
 // Usually http://localhost:4321/ for developing/running locally
 // Usually https://astro-guesser.netlify.com/ for remote
-// const URL = "https://astro-guesser.netlify.com/";
-const URL = "http://localhost:4321/";
+// const URL = "http://localhost:4321/";
+const URL = "https://astro-guesser.netlify.com/";
 
 // Set user token based on constant value or localStorage. Use localStorage
 // if you plan on sharing your script with others to prevent leaking your token.
@@ -805,4 +805,3 @@ function Geoguessr() {
     geoguessr.on("round-start", (obj) => {showUi(); console.log("Round started", obj)});
     geoguessr.on("game-end", (obj) => recordGameResults);
 })();
-
