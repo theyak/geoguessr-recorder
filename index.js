@@ -9,7 +9,7 @@
 // ==/UserScript==
 
 // Script has only been made to work with single player standard and streak modes.
-// It might work with standard multi-player mode
+// It might work with standard multi-player mode, I haven't tested it.
 // It does not work with battle royale as I never play that.
 //
 // GeoGuessr is largely played on the honor system. Please do not use this script or any other method to cheat.
@@ -20,17 +20,19 @@
 // * Come up with a way to make a private api key
 // * Figure out what to do if teleport fails
 // * Fix round-ended event from firing when starting streaks
-// * After playing single rounds, I went to a regular game and round-started fired twice. Fix that.
+
+// Enter your user token in the line below between the quotation marks.
+const TOKEN = "";
 
 // Change host to wherever server is running.
-// Usually http://127.0.0.1:4321/ for local servers
-// Usually https://geoguessr.zyzzx.workers.dev/api for remote
+// Usually http://localhost:4321/ for developing/running locally
+// Usually https://astro-guesser.netlify.com/ for remote
+// const URL = "https://astro-guesser.netlify.com/";
 const URL = "http://localhost:4321/";
 
-// Change token to whatever you were assigned in the web app.
-// You can also store it in localStorage while on the GeoGuessr website.
-// localStorage.setItem("user_token", "your-token-here");
-const TOKEN = localStorage.getItem("user_token") || "your-token-here";
+// Set user token based on constant value or localStorage. Use localStorage
+// if you plan on sharing your script with others to prevent leaking your token.
+const user_token = TOKEN || localStorage.getItem("user_token");
 
 /**
  * @typdef {Object} Position
@@ -68,6 +70,7 @@ function Geoguessr() {
     let panorama;
 
     /**
+     * @type {GameData}
      * Game data from AJAX request.
      */
     let gameData = {};
@@ -83,6 +86,7 @@ function Geoguessr() {
     const {fetch: origFetch} = win;
 
     /**
+     * @type {Position}
      * Current player position
      */
     const position = {lat: 0, lng: 0, pitch: 0, heading: 0};
@@ -176,7 +180,7 @@ function Geoguessr() {
         }
 
         const hash = `${data.token}-${data.round}`;
-        if (hash !== emitRoundStart.lastHash) {
+        if (hash !== emitRoundEnd.lastHash) {
             emit("round-end", data);
 
             if (data.state === "finished") {
@@ -220,7 +224,7 @@ function Geoguessr() {
                     return null;
                 }
                 const data = JSON.parse(dom.innerText);
-                if (data.props && data.props.pageProps) {
+                if (data.props && data.props.pageProps && data.props.pageProps.game.state !== "finished") {
                     gameData = data.props.pageProps.game;
                     emitRoundStart(gameData);
                 }
@@ -232,10 +236,14 @@ function Geoguessr() {
      * Set up a basic DOM observer so we can watch for basic game events.
      */
     function setupMutationObserver() {
+        setTimeout(() => emit("location-change", {to: document.location.href, from: null}));
+
+        let oldHref = window.location.href;
         const observer = new MutationObserver((mutations) => {
-            const win = unsafeWindow || window;
-            if (!win.google) {
-                return;
+
+            if (mutations.some(() => oldHref !== document.location.href)) {
+                emit("location-change", {to: document.location.href, from: oldHref});
+                oldHref = document.location.href;
             }
 
             mutations.forEach((mutation) => {
@@ -424,6 +432,7 @@ function Geoguessr() {
     // Allowed distances for teleport
     let teleportOptions = [25, 50, 75, 100, 150, 200, 250, 500, 1000];
 
+
     /**
      * Make a post request to server.
      *
@@ -455,6 +464,7 @@ function Geoguessr() {
         });
     }
 
+
     /**
      * Greasemonkey/Tampermonkey version of sending data to API.
      * I've had mixed luck with XMLHttpRequest so keeping this here
@@ -484,6 +494,7 @@ function Geoguessr() {
            });
         });
     }
+
 
     /**
      * Loop through all visited points and check if the provided
@@ -525,7 +536,7 @@ function Geoguessr() {
      */
     async function recordPosition({position, game}) {
 
-        if (Object.keys(game).length <= 0) {
+        if (Object.keys(game).length <= 0 || !user_token) {
             return;
         }
 
@@ -543,7 +554,7 @@ function Geoguessr() {
 
         try {
             const result = await postApi(url, {
-                token: TOKEN,
+                token: user_token,
                 type: "travel",
                 game: game.token,
                 round: game.round,
@@ -551,11 +562,45 @@ function Geoguessr() {
                 nick: game.player.nick,
                 ...position
             });
-        } catch (ex) {
-            console.log("error", ex);
+        } catch (err) {
         }
     }
 
+
+    /**
+     * Record information about game, including start points, guessed points, time, etc.
+     *
+     * @param {GameData} game
+     */
+    async function recordGameResults(game) {
+        if (!user_token) {
+            return;
+        }
+
+        const url = `record-results`;
+
+        try {
+            const result = await postApi(url, {
+                token: user_token,
+                game: game.token,
+                map: game.map,
+                mapName: game.mapName,
+                roundCount: game.roundCount,
+                moving: !game.forbidMoving,
+                zooming: !game.forbidZooming,
+                rotating: !game.forbidRotating,
+                timeLimit: game.timeLimit,
+                score: game.player.totalScore.amount,
+                distance: game.player.totalDistanceInMeters,
+                time: game.player.totalTime,
+                userId: game.player.id,
+                userNick: game.player.nick,
+                rounds: game.rounds,
+                guesses: game.player.guesses,
+            });
+        } catch (err) {
+        }
+    }
 
 
     /**
@@ -657,9 +702,10 @@ function Geoguessr() {
      * Toggle the UI off
      */
     function hideUi() {
-        let dom = document.getElementById("zzyzx-ui");
+        let dom = document.getElementById("recorder-ui");
         if (dom) {
             dom.style.visibility = "hidden";
+            dom.style.left = "-999px";
         }
     }
 
@@ -667,17 +713,20 @@ function Geoguessr() {
      * Toggle the UI onn
      */
     function showUi() {
-        let dom = document.getElementById("zzyzx-ui");
+        let dom = document.getElementById("recorder-ui");
         if (dom) {
             dom.style.visibility = "";
+            dom.style.left = "1em";
         }
     }
 
     /**
-     * Set up the UI
+     * Set up the UI, which for now is only the teleport distance label.
+     * We append it to the body and give it a fixed position, otherwise
+     * the React renderer will clobber the UI, making it go poof!
      */
     function setupUi() {
-        if (document.getElementById("zzyzx-ui")) {
+        if (document.getElementById("recorder-ui")) {
             return;
         }
 
@@ -685,19 +734,19 @@ function Geoguessr() {
         ui.style.visibility = "hidden";
         ui.style.position = "fixed";
         ui.style.top = "3em";
-        ui.style.left = "1em";
+        ui.style.left = "-999px";
         ui.style.zIndex = "99999";
         ui.style.fontSize = "16px";
         ui.style.display = "block";
         ui.style.width = "300px";
-        ui.id = "zzyzx-ui";
+        ui.id = "recorder-ui";
 
         const div = document.createElement("DIV");
         div.innerText = "Teleport Distance: " + teleportDistance + " m";
         div.style.position = "absolute";
         div.style.top = "0";
         div.style.color = "white";
-        div.id = "zzyzx-teleport-label";
+        div.id = "recorder-teleport-label";
 
         ui.appendChild(div);
         document.body.appendChild(ui);
@@ -706,8 +755,8 @@ function Geoguessr() {
     /**
      * Draw teleport distance
      */
-    function drawTeleport() {
-        const dom = document.getElementById("zzyzx-teleport-label");
+    function updateTeleportUi() {
+        const dom = document.getElementById("recorder-teleport-label");
         if (dom) {
             dom.innerText = "Teleport Distance: " + teleportDistance + " m";
         }
@@ -725,7 +774,7 @@ function Geoguessr() {
         }
 
         teleportDistance = teleportOptions[index];
-        drawTeleport();
+        updateTeleportUi();
     }
 
     /**
@@ -740,7 +789,7 @@ function Geoguessr() {
         }
 
         teleportDistance = teleportOptions[index];
-        drawTeleport();
+        updateTeleportUi();
     }
 
     const geoguessr = new Geoguessr();
@@ -750,8 +799,10 @@ function Geoguessr() {
         setupHotkeys();
         setupUi();
     });
+
     geoguessr.on("position-changed", recordPosition);
     geoguessr.on("round-end", (obj) => {hideUi(); console.log("Round ended", obj)});
     geoguessr.on("round-start", (obj) => {showUi(); console.log("Round started", obj)});
-    geoguessr.on("game-end", () => console.log("Game ended"));
+    geoguessr.on("game-end", (obj) => recordGameResults);
 })();
+
