@@ -27,8 +27,8 @@ const TOKEN = "";
 // Change host to wherever server is running.
 // Usually http://localhost:4321/ for developing/running locally
 // Usually https://astro-guesser.netlify.com/ for remote
-// const URL = "http://localhost:4321/";
-const URL = "https://astro-guesser.netlify.com/";
+const URL = "http://localhost:4321/";
+//const URL = "https://astro-guesser.netlify.com/";
 
 // Set user token based on constant value or localStorage. Use localStorage
 // if you plan on sharing your script with others to prevent leaking your token.
@@ -405,7 +405,7 @@ function Geoguessr() {
 		on,
 		off,
         isGamePage,
-        position
+        position,
 	};
 }
 
@@ -426,12 +426,14 @@ function Geoguessr() {
     // Streetview object
     let panorama;
 
-    // Distance to teleport
+    // Default distance to teleport
     let teleportDistance = 25;
 
     // Allowed distances for teleport
     let teleportOptions = [25, 50, 75, 100, 150, 200, 250, 500, 1000];
 
+    // Game object retrieved from round-start round-end
+    let game;
 
     /**
      * Make a post request to server.
@@ -566,6 +568,30 @@ function Geoguessr() {
         }
     }
 
+    async function bookmark() {
+        console.log("Bookmark");
+        const lat = panorama.getPosition().lat();
+        const lng = panorama.getPosition().lng();
+        let { heading, pitch } = panorama.getPov();
+        console.log(lat, lng, heading, pitch);
+
+        try {
+            console.log(game);
+            const result = await postApi("record-location", {
+                token: user_token,
+                type: "bookmark",
+                game: game.token,
+                round: game.round,
+                map: game.map,
+                nick: game.player.nick,
+                lat,
+                lng,
+                heading,
+                pitch
+            });
+        } catch (err) {
+        }
+    }
 
     /**
      * Record information about game, including start points, guessed points, time, etc.
@@ -681,6 +707,7 @@ function Geoguessr() {
             "KeyF": () => teleport(teleportDistance),
             "KeyB": () => teleport(teleportDistance, true),
             "KeyV": () => teleport(teleportDistance, true),
+            "KeyL": () => onBookmark(),
             "PageUp": () => increaseTeleport(),
             "PageDown": () => decreaseTeleport()
         };
@@ -739,17 +766,43 @@ function Geoguessr() {
         ui.style.fontSize = "16px";
         ui.style.display = "block";
         ui.style.width = "300px";
+        ui.style.userSelect = "none";
         ui.id = "recorder-ui";
 
-        const div = document.createElement("DIV");
-        div.innerText = "Teleport Distance: " + teleportDistance + " m";
-        div.style.position = "absolute";
-        div.style.top = "0";
-        div.style.color = "white";
-        div.id = "recorder-teleport-label";
+        const container = document.createElement("DIV");
+        container.style.display = "flex";
+        container.style.gap = "8px";
 
-        ui.appendChild(div);
+        const bookmark = document.createElement("DIV");
+        bookmark.style.color = "white";
+        bookmark.style.cursor = "pointer";
+        bookmark.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" style="fill: rgba(255, 255, 255, 1);transform: ;msFilter:;"><path d="M18 2H6c-1.103 0-2 .897-2 2v18l8-4.572L20 22V4c0-1.103-.897-2-2-2zm0 16.553-6-3.428-6 3.428V4h12v14.553z"></path></svg>`;
+        bookmark.onclick = onBookmark;
+
+        const tp = document.createElement("DIV");
+        tp.innerText = "Teleport Distance: " + teleportDistance + " m";
+        tp.style.color = "white";
+        tp.style.lineHeight = "24px";
+        tp.id = "recorder-teleport-label";
+
+        container.appendChild(bookmark);
+        container.appendChild(tp);
+        ui.appendChild(container);
         document.body.appendChild(ui);
+    }
+
+    /**
+     * Event handler form when user clicks the bookmark icon.
+     */
+    function onBookmark() {
+        const dom = document.getElementById("recorder-teleport-label");
+        if (dom) {
+            dom.innerText = "Location bookmarked";
+            bookmark();
+            setTimeout(() => {
+                dom.innerText = "Teleport Distance: " + teleportDistance + " m";
+            }, 2000);
+        }
     }
 
     /**
@@ -802,6 +855,6 @@ function Geoguessr() {
 
     geoguessr.on("position-changed", recordPosition);
     geoguessr.on("round-end", (obj) => {hideUi(); console.log("Round ended", obj)});
-    geoguessr.on("round-start", (obj) => {showUi(); console.log("Round started", obj)});
-    geoguessr.on("game-end", (obj) => recordGameResults);
+    geoguessr.on("round-start", (obj) => {showUi(); game = obj; console.log("Round started", obj)});
+    geoguessr.on("game-end", async (obj) => {await recordGameResults(obj)});
 })();
