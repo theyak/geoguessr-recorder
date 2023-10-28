@@ -19,7 +19,8 @@
 // * Come up with a way to view location data
 // * Come up with a way to make a private api key
 // * Figure out what to do if teleport fails
-// * Fix round-ended event from firing when starting streaks
+// * Fix round-ended event from firing when starting streaks or quickplay
+// * Fix round-started event on page refresh. It's not showing the UI.
 
 // Enter your user token in the line below between the quotation marks.
 const TOKEN = "";
@@ -149,6 +150,26 @@ function Geoguessr() {
             location.pathname.startsWith("/team-duels/") ||
             location.pathname.startsWith("/bullseye/") ||
             location.pathname.startsWith("/live-challenge/");
+    }
+
+
+    async function geocode(lat, lng) {
+        if (!map) {
+            setTimeout(() => geocode(lat, lng), 1000);
+            return;
+        }
+
+        const geocoder = new map.Geocoder();
+        const latlng = {
+            lat,
+            lng,
+        };
+
+        const response = await geocoder.geocode({ location: latlng });
+        if (response.results && response.results.length > 0) {
+            return response.results[0].formatted_address || "";
+        }
+        return "";
     }
 
     /**
@@ -406,6 +427,7 @@ function Geoguessr() {
 		off,
         isGamePage,
         position,
+        geocode,
 	};
 }
 
@@ -554,6 +576,8 @@ function Geoguessr() {
         }
         positionHistory.push({lat, lng});
 
+        const location = await geoguessr.geocode(lat, lng);
+
         try {
             const result = await postApi(url, {
                 token: user_token,
@@ -562,6 +586,7 @@ function Geoguessr() {
                 round: game.round,
                 map: game.map,
                 nick: game.player.nick,
+                location,
                 ...position
             });
         } catch (err) {
@@ -569,14 +594,13 @@ function Geoguessr() {
     }
 
     async function bookmark() {
-        console.log("Bookmark");
         const lat = panorama.getPosition().lat();
         const lng = panorama.getPosition().lng();
         let { heading, pitch } = panorama.getPov();
-        console.log(lat, lng, heading, pitch);
+
+        const location = await geoguessr.geocode(lat, lng);
 
         try {
-            console.log(game);
             const result = await postApi("record-location", {
                 token: user_token,
                 type: "bookmark",
@@ -587,7 +611,8 @@ function Geoguessr() {
                 lat,
                 lng,
                 heading,
-                pitch
+                pitch,
+                location
             });
         } catch (err) {
         }
@@ -604,6 +629,15 @@ function Geoguessr() {
         }
 
         const url = `record-results`;
+
+        for (let i = 0; i < game.rounds.length; i++) {
+            game.rounds[i].location = await geoguessr.geocode(game.rounds[i].lat, game.rounds[i].lng);
+        }
+
+        console.log("Guesses", game.player.guesses);
+        for (let i = 0; i < game.player.guesses.length; i++) {
+            game.player.guesses[i].location = await geoguessr.geocode(game.player.guesses[i].lat, game.player.guesses[i].lng);
+        }
 
         try {
             const result = await postApi(url, {
@@ -809,6 +843,7 @@ function Geoguessr() {
      * Draw teleport distance
      */
     function updateTeleportUi() {
+        showUi();
         const dom = document.getElementById("recorder-teleport-label");
         if (dom) {
             dom.innerText = "Teleport Distance: " + teleportDistance + " m";
@@ -819,6 +854,7 @@ function Geoguessr() {
      * Event handler for increasing the teleport distance
      */
     function increaseTeleport() {
+        showUi();
         let index = teleportOptions.indexOf(teleportDistance);
         if (index >= teleportOptions.length - 1) {
             index = teleportOptions.length - 1;
