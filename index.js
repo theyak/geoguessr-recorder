@@ -770,15 +770,47 @@ function Geoguessr() {
         }
     }
 
+    function getElement(selector, timeout = 0) {
+        return new Promise(resolve => {
+            let timer = null;
+
+            if (document.querySelector(selector)) {
+                return resolve(document.querySelector(selector));
+            }
+
+            const observer = new MutationObserver(mutations => {
+                if (document.querySelector(selector)) {
+                    if (timer) {
+                        clearTimeout(timer);
+                    }
+                    observer.disconnect();
+                    resolve(document.querySelector(selector));
+                }
+            });
+
+            // If you get "parameter 1 is not of type 'Node'" error, see https://stackoverflow.com/a/77855838/492336
+            observer.observe(document.body, {
+                childList: true,
+                subtree: true
+            });
+
+            if (timeout > 0) {
+                timer = setTimeout(() => {
+                    observer.disconnect();
+                    resolve(false);
+                }, timeout);
+            }
+        });
+    }
+
     /**
      * Toggle the UI onn
      */
     function showUi() {
-        let dom = document.getElementById("recorder-ui");
-        if (dom) {
+        getElement("#recorder-ui").then(dom => {
             dom.style.visibility = "";
             dom.style.left = "1em";
-        }
+        });
     }
 
     /**
@@ -854,7 +886,9 @@ function Geoguessr() {
      * Event handler for increasing the teleport distance
      */
     function increaseTeleport() {
+        // Ensure UI is showing.
         showUi();
+
         let index = teleportOptions.indexOf(teleportDistance);
         if (index >= teleportOptions.length - 1) {
             index = teleportOptions.length - 1;
@@ -870,6 +904,9 @@ function Geoguessr() {
      * Event handler for decreasing the teleport distance
      */
     function decreaseTeleport() {
+        // Ensure UI is showing.
+        showUi();
+
         let index = teleportOptions.indexOf(teleportDistance);
         if (index <= 0) {
             index = 0;
